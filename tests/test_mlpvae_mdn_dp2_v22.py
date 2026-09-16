@@ -186,10 +186,21 @@ def load_and_adapt(path: str | Path, is_test: bool) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 Z_GRID = np.linspace(0.0, 6.0, 301, dtype=np.float32)
 
-DEFAULT_FINETUNE_EPOCHS = 60
+DEFAULT_FINETUNE_EPOCHS = 20
 DEFAULT_FINETUNE_LR = 1e-4
 DEFAULT_FINETUNE_BATCH = 256
-DEFAULT_FINETUNE_PATIENCE = 15
+DEFAULT_FINETUNE_PATIENCE = 5
+# epochs/patience capped low deliberately: subtask 3 fine-tunes 8 times
+# (4 sim/scenario combos x 2 tasksets) in one CI job, on a CPU-only GitHub
+# Actions runner (no GPU) -- measured ~40s/epoch for one combo's 90k-row
+# training file at 2 threads, so 60 epochs x 8 combos worst-case was ~5.3h
+# of fine-tuning alone (confirmed: PR #76's first real attempt hit
+# GitHub's 6h job ceiling and was force-canceled). 20 epochs x 8 combos
+# worst-case is ~1h47m, leaving real margin for dependency setup (git
+# clone + LFS pull of the ~2.5GB speculator weights) and public-data
+# download. lr/batch_size/sigma_floor/etc. below are unchanged from this
+# checkpoint's own config.yaml -- only the epoch budget is CI-driven, not
+# tuned for fine-tune quality.
 # Same mix as this checkpoint's own config.yaml (lam_z=20.0, lam_r=0.1,
 # sigma_floor=0.3, lam_prior=1.0); beta=0.0 (no KL term) -- a short
 # warm-start fine-tune doesn't need the original run's beta annealing
