@@ -37,6 +37,7 @@ import copy
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import h5py
@@ -97,17 +98,21 @@ def _clone_if_missing(url: str, dest: Path) -> None:
 def ensure_model_deps() -> tuple[str, str, str]:
     """Clone dependency repos if needed; return (baseline_ckpt, speculator_dir,
     filter_dir)."""
+    t0 = time.time()
     photoz_mlpvae_dir = DEPS_DIR / "photoz_mlpvae"
     speculator_repo_dir = DEPS_DIR / "speculator"
 
     _run(["git", "lfs", "install", "--skip-repo"])
 
     _clone_if_missing(PHOTOZ_MLPVAE_URL, photoz_mlpvae_dir)
+    print(f"[deps] photoz_mlpvae clone done  elapsed={time.time() - t0:.1f}s", flush=True)
     _clone_if_missing(SPECULATOR_URL, speculator_repo_dir)
+    print(f"[deps] speculator clone done  elapsed={time.time() - t0:.1f}s", flush=True)
 
     lfs_marker = speculator_repo_dir / "trained" / "Inoue_IGM" / "30_100" / "pca_basis.npz"
     if not lfs_marker.exists() or lfs_marker.stat().st_size < _LFS_SMUDGED_MIN_BYTES:
         _run(["git", "lfs", "pull"], cwd=str(speculator_repo_dir))
+        print(f"[deps] speculator lfs pull done  elapsed={time.time() - t0:.1f}s", flush=True)
 
     for p in (str(DEPS_DIR), str(photoz_mlpvae_dir)):
         if p not in sys.path:
@@ -186,28 +191,29 @@ def load_and_adapt(path: str | Path, is_test: bool) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 Z_GRID = np.linspace(0.0, 6.0, 301, dtype=np.float32)
 
-DEFAULT_FINETUNE_EPOCHS = 20
+DEFAULT_FINETUNE_EPOCHS = 6
 DEFAULT_FINETUNE_LR = 1e-4
 DEFAULT_FINETUNE_BATCH = 256
-DEFAULT_FINETUNE_PATIENCE = 5
+DEFAULT_FINETUNE_PATIENCE = 3
 # epochs/patience capped low deliberately: subtask 3 fine-tunes 8 times
 # (4 sim/scenario combos x 2 tasksets) in one CI job, on a CPU-only GitHub
-# Actions runner (no GPU) -- measured ~40s/epoch for one combo's 90k-row
-# training file at 2 threads, so 60 epochs x 8 combos worst-case was ~5.3h
-# of fine-tuning alone (confirmed: PR #76's first real attempt hit
-# GitHub's 6h job ceiling and was force-canceled). 20 epochs x 8 combos
-# worst-case is ~1h47m, leaving real margin for dependency setup (git
-# clone + LFS pull of the ~2.5GB speculator weights) and public-data
-# download. lr/batch_size/sigma_floor/etc. below are unchanged from this
-# checkpoint's own config.yaml -- only the epoch budget is CI-driven, not
-# tuned for fine-tune quality.
-# Same mix as this checkpoint's own config.yaml (lam_z=20.0, lam_r=0.1,
-# sigma_floor=0.3, lam_prior=1.0); beta=0.0 (no KL term) -- a short
-# warm-start fine-tune doesn't need the original run's beta annealing
-# schedule. z_weights=None (the checkpoint's own name records it was itself
-# trained with --no-z-weight) so the fine-tune loop matches that recipe
-# rather than reintroducing inverse-frequency z-weighting the baseline
-# never saw.
+# Actions runner (no GPU). A local 2-thread-CPU measurement estimated
+# ~40s/epoch for one combo's 90k-row training file, predicting 60 epochs
+# x 8 combos would take ~5.3h -- but the FIRST real attempt at 60 epochs
+# hit GitHub's 6h ceiling, AND SO DID a second attempt at 20 epochs
+# (predicted ~1h47m), meaning the actual per-epoch/per-combo cost on the
+# real runner is well above the local estimate (or something else in
+# setup is unexpectedly slow). print(...,flush=True) progress lines were
+# added throughout this file (dep cloning, tarball download, per-combo/
+# per-epoch fine-tune timing) specifically to get real visibility into
+# where CI time actually goes, since pytest's default output capturing
+# meant BOTH prior 6h-timeout runs produced zero visible progress output
+# despite running the entire time. 6 epochs x 8 combos is a deliberately
+# conservative diagnostic value pending that telemetry from an actual
+# passing (or newly-informative) CI run -- raise it back up once the
+# real per-epoch cost is known. lr/batch_size/sigma_floor/etc. below are
+# unchanged from this checkpoint's own config.yaml -- only the epoch
+# budget is CI-driven, not tuned for fine-tune quality.
 FINETUNE_LAM_Z = 20.0
 FINETUNE_LAM_R = 0.1
 FINETUNE_LAM_PRIOR = 1.0
@@ -277,6 +283,7 @@ def _run_estimation_only(
     itself by fine-tuning that same baseline live on each combo's own
     training file.
     """
+    t0 = time.time()
     device = _device()
     model, scaler, col_medians = PhotozMLPVAE.load(
         model_file, SPECULATOR_DIR, FILTER_DIR, device=device
@@ -289,6 +296,7 @@ def _run_estimation_only(
     )
     z_pred, sigma_z = _infer(model, X, device)
     _write_qp_output(test_df["object_id"].to_numpy(), z_pred, sigma_z, output_file)
+    print(f"[estimate] {model_file} -> {output_file}  elapsed={time.time() - t0:.1f}s", flush=True)
 
 
 def _run_training_and_estimation(
@@ -312,7 +320,10 @@ def _run_training_and_estimation(
     plus a lam_prior term for the learned i-mag BPZ-style redshift prior
     that the z-separated model in mlpvae_zsep_v4_speculator doesn't have.
     """
+    t_start = time.time()
     device = _device()
+    print(f"[finetune] {train_file} -> {output_file}  device={device}  "
+          f"epochs<={epochs} patience={patience}", flush=True)
 
     train_df = load_and_adapt(train_file, is_test=False)
     test_df = load_and_adapt(test_file, is_test=True)
@@ -331,6 +342,9 @@ def _run_training_and_estimation(
         val_df, use_colors=True, use_euclid=False, use_gaap=True,
         scaler=scaler, col_medians=col_medians, fit=False, standardize=True,
     )
+
+    print(f"[finetune] X_tr={X_tr.shape} X_val={X_val.shape} "
+          f"prep_elapsed={time.time() - t_start:.1f}s", flush=True)
 
     model, _, _ = PhotozMLPVAE.load(BASELINE_CKPT, SPECULATOR_DIR, FILTER_DIR, device=device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -351,6 +365,7 @@ def _run_training_and_estimation(
     epochs_no_improve = 0
 
     for epoch in range(epochs):
+        t_epoch = time.time()
         model.train()
         for batch_idx in _batches(len(X_tr), batch_size):
             loss_dict = model.loss(
@@ -372,6 +387,10 @@ def _run_training_and_estimation(
                 use_nll_z=True,
             )["z_sup"].item()
 
+        print(f"[finetune] epoch {epoch}  val_z_sup={val_loss:.4f}  "
+              f"epoch_elapsed={time.time() - t_epoch:.1f}s  "
+              f"total_elapsed={time.time() - t_start:.1f}s", flush=True)
+
         if val_loss < best_val:
             best_val = val_loss
             best_state = copy.deepcopy(model.state_dict())
@@ -390,6 +409,7 @@ def _run_training_and_estimation(
     )
     z_pred, sigma_z = _infer(model, X_test, device)
     _write_qp_output(test_df["object_id"].to_numpy(), z_pred, sigma_z, output_file)
+    print(f"[finetune] done  total_elapsed={time.time() - t_start:.1f}s", flush=True)
 
 
 def run_taskset_1_estimation_only(
@@ -429,6 +449,7 @@ def setup_submit_area() -> int:
     check rather than `if not os.path.exists(SUBMIT_DIR)` because
     ensure_model_deps() already created SUBMIT_DIR/_deps at import time.
     """
+    t0 = time.time()
     os.makedirs(os.path.join(SUBMIT_DIR, "outputs_2"), exist_ok=True)
     os.makedirs(os.path.join(SUBMIT_DIR, "outputs_3"), exist_ok=True)
 
@@ -437,6 +458,8 @@ def setup_submit_area() -> int:
     )
     if SUBMISSION_URL and not os.path.exists(marker):
         submit_utils.download_and_extract_tar(SUBMISSION_URL, SUBMIT_DIR)
+        print(f"[submit_area] tarball downloaded+extracted  elapsed={time.time() - t0:.1f}s",
+              flush=True)
 
     for taskset in TASKSETS:
         estimation_only = (
@@ -456,12 +479,16 @@ def setup_submit_area() -> int:
                     f"pz_challenge_taskset_{taskset}_{sim}_pz_estimate_{scenario}.hdf5",
                 )
                 if not os.path.exists(estimate_file):
+                    print(f"[submit_area] generating fallback estimate for "
+                          f"taskset{taskset}_{sim}_{scenario}  elapsed={time.time() - t0:.1f}s",
+                          flush=True)
                     test_file = os.path.join(
                         PUBLIC_AREA,
                         f"pz_challenge_taskset_{taskset}_{sim}_test_{scenario}.hdf5",
                     )
                     estimation_only(model_file, test_file, estimate_file)
 
+    print(f"[submit_area] done  elapsed={time.time() - t0:.1f}s", flush=True)
     return 0
 
 
