@@ -62,12 +62,7 @@ TASKSETS = [1, 2, 3, 4]
 DEPS_DIR = Path(SUBMIT_DIR) / "_deps"
 PHOTOZ_MLPVAE_URL = "https://github.com/Klinjin/photoz_mlpvae.git"
 SPECULATOR_URL = "https://github.com/Klinjin/speculator.git"
-# This checkpoint's frozen Speculator submodule was trained against the
-# Inoue_IGM PCA basis as of this commit (30/20/20 components per band) --
-# `main` has since been retrained with different PCA dims (for a later,
-# unrelated checkpoint), which breaks this checkpoint's strict state_dict
-# load with a size mismatch. Pinned, not tracking `main`, so this
-# submission stays reproducible regardless of future speculator retrains.
+# pinned: checkpoint needs this commit's PCA dims, not current main's
 SPECULATOR_PIN_COMMIT = "cf3f653"
 # Below this, a Speculator .npz is still an unsmudged Git LFS pointer (~130 bytes).
 _LFS_SMUDGED_MIN_BYTES = 1_000_000
@@ -288,10 +283,6 @@ def _run_training_and_estimation(
     val_df = train_df.iloc[idx[:n_val]].reset_index(drop=True)
     tr_df = train_df.iloc[idx[n_val:]].reset_index(drop=True)
 
-    # build_features() no longer returns per-band mags/errs/mask (2026-08-24
-    # obs_catalog/dataloader.py change) -- this fine-tune loop's loss only
-    # ever used X_tr/z_tr/scaler/col_medians (and X_val/z_val below), so
-    # the dropped values were already dead here.
     X_tr, z_tr, scaler, col_medians = build_features(
         tr_df, use_colors=True, use_euclid=False, use_gaap=True, fit=True,
     )
