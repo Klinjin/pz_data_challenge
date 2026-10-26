@@ -6,16 +6,23 @@ requirements_mlpvae_zsep_v4_speculator.txt and the workflow yaml;
 `submissions_src/` is local dev scratch, gitignored, never committed).
 
 Model: mlpvae_zsep_v4_lsst_gaap1p0_e2000_lzmin20, the z-separated
-architecture (photoz_mlpvae.model.photoz_mlpvae.PhotozMLPVAE, NOT the older
-photoz_mlpvae_old.PhotozMLPVAE mlpvae_speculator_v2 uses) -- z gets its own
-supervised latent + MLP head; the 15 SPS params keep a VAE latent
-conditioned on z. Same two GitHub-hosted dependencies as mlpvae_speculator_v2
-(github.com/Klinjin/photoz_mlpvae for vendored source + checkpoints,
-github.com/Klinjin/speculator for the Speculator weights via Git LFS) --
-same speculator_dir/filter_dir, same use_colors/use_euclid/use_gaap
-settings, so no adapter or dependency-hosting changes were needed, only a
-different model module/checkpoint path and a different subtask-3 fine-tune
-loop (see below).
+architecture -- z gets its own supervised latent + MLP head; the 15 SPS
+params keep a VAE latent conditioned on z. Loaded via
+photoz_mlpvae.model.photoz_mlpvae_fixedprior.PhotozMLPVAE (NOT
+photoz_mlpvae.model.photoz_mlpvae.PhotozMLPVAE, and NOT
+photoz_mlpvae_old.PhotozMLPVAE, which mlpvae_speculator_v2 uses): this
+checkpoint predates photoz_mlpvae.py's i-mag-conditioned zprior +
+feat_mean/feat_scale additions, so the current module's strict=False load
+would silently leave those buffers untrained instead of erroring --
+photoz_mlpvae_fixedprior is a verified-strict-load recovery of the
+pre-zprior architecture. Same two GitHub-hosted dependencies as
+mlpvae_speculator_v2 (github.com/Klinjin/photoz_mlpvae for vendored source
++ checkpoints, github.com/Klinjin/speculator for the Speculator weights
+via Git LFS, pinned to SPECULATOR_PIN_COMMIT -- this checkpoint predates a
+later PCA retrain on speculator's main), same use_colors/use_euclid/
+use_gaap settings, so no adapter or dependency-hosting changes were
+needed, only a different model module/checkpoint path and a different
+subtask-3 fine-tune loop (see below).
 """
 
 from __future__ import annotations
@@ -60,6 +67,13 @@ TASKSETS = [1, 2, 3, 4]
 DEPS_DIR = Path(SUBMIT_DIR) / "_deps"
 PHOTOZ_MLPVAE_URL = "https://github.com/Klinjin/photoz_mlpvae.git"
 SPECULATOR_URL = "https://github.com/Klinjin/speculator.git"
+# This checkpoint's frozen Speculator submodule was trained against the
+# Inoue_IGM PCA basis as of this commit (30/20/20 components per band) --
+# `main` has since been retrained with different PCA dims (for a later,
+# unrelated checkpoint), which breaks this checkpoint's strict state_dict
+# load with a size mismatch. Pinned, not tracking `main`, so this
+# submission stays reproducible regardless of future speculator retrains.
+SPECULATOR_PIN_COMMIT = "cf3f653"
 _LFS_SMUDGED_MIN_BYTES = 1_000_000
 
 
@@ -67,11 +81,15 @@ def _run(cmd: list[str], **kwargs) -> None:
     subprocess.run(cmd, check=True, **kwargs)
 
 
-def _clone_if_missing(url: str, dest: Path) -> None:
+def _clone_if_missing(url: str, dest: Path, commit: str | None = None) -> None:
     if dest.exists():
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _run(["git", "clone", "--depth", "1", url, str(dest)])
+    if commit:
+        _run(["git", "clone", "--no-checkout", url, str(dest)])
+        _run(["git", "checkout", commit], cwd=str(dest))
+    else:
+        _run(["git", "clone", "--depth", "1", url, str(dest)])
 
 
 def ensure_model_deps() -> tuple[str, str, str]:
@@ -83,7 +101,7 @@ def ensure_model_deps() -> tuple[str, str, str]:
     _run(["git", "lfs", "install", "--skip-repo"])
 
     _clone_if_missing(PHOTOZ_MLPVAE_URL, photoz_mlpvae_dir)
-    _clone_if_missing(SPECULATOR_URL, speculator_repo_dir)
+    _clone_if_missing(SPECULATOR_URL, speculator_repo_dir, commit=SPECULATOR_PIN_COMMIT)
 
     lfs_marker = speculator_repo_dir / "trained" / "Inoue_IGM" / "30_100" / "pca_basis.npz"
     if not lfs_marker.exists() or lfs_marker.stat().st_size < _LFS_SMUDGED_MIN_BYTES:
@@ -109,8 +127,15 @@ def ensure_model_deps() -> tuple[str, str, str]:
 try:
     BASELINE_CKPT, SPECULATOR_DIR, FILTER_DIR = ensure_model_deps()
 
-    from obs_catalog.dataloader import build_features  # noqa: E402
-    from photoz_mlpvae.model.photoz_mlpvae import PhotozMLPVAE  # noqa: E402
+    from obs_catalog.dataloader import (  # noqa: E402
+        build_features, raw_mags_errs_mask, LSST_GAAP_MAG_COLS, LSST_GAAP_ERR_COLS,
+    )
+    # mlpvae_zsep_v4_lsst_gaap1p0_e2000_lzmin20 predates photoz_mlpvae.py's
+    # i-mag-conditioned zprior + feat_mean/feat_scale additions -- loading it
+    # with the current module silently mis-predicts (strict=False leaves
+    # those buffers untrained) instead of erroring. photoz_mlpvae_fixedprior
+    # is a verified-strict-load recovery of the pre-zprior architecture.
+    from photoz_mlpvae.model.photoz_mlpvae_fixedprior import PhotozMLPVAE  # noqa: E402
 except:
     pass
     
@@ -267,8 +292,8 @@ def _run_training_and_estimation(
     5-tuple (z_pred, mu_z, log_var_z, mu_15, log_var_15), not the old
     4-tuple (z_pred, log_sigma_z, mu_15, log_var_15), so the old hand-rolled
     loss doesn't apply. .loss() is the model's own native training
-    objective, and build_features already returns the mags/errs/mask it
-    needs for free.
+    objective; mags/errs/mask for its reconstruction term come from
+    raw_mags_errs_mask (build_features itself no longer carries them).
     """
     device = _device()
 
@@ -281,13 +306,19 @@ def _run_training_and_estimation(
     val_df = train_df.iloc[idx[:n_val]].reset_index(drop=True)
     tr_df = train_df.iloc[idx[n_val:]].reset_index(drop=True)
 
-    X_tr, mags_tr, errs_tr, mask_tr, z_tr, scaler, col_medians = build_features(
+    X_tr, z_tr, scaler, col_medians = build_features(
         tr_df, use_colors=True, use_euclid=False, use_gaap=True, fit=True,
     )
-    X_val, mags_val, errs_val, mask_val, z_val, _, _ = build_features(
+    X_val, z_val, _, _ = build_features(
         val_df, use_colors=True, use_euclid=False, use_gaap=True,
         scaler=scaler, col_medians=col_medians, fit=False,
     )
+    # build_features() no longer returns per-band mags/errs/mask (2026-08-24
+    # obs_catalog/dataloader.py change) -- raw_mags_errs_mask is the current
+    # standalone helper for callers (like this fixedprior checkpoint's
+    # loss()) that still need them for a reconstruction term.
+    mags_tr, errs_tr, mask_tr = raw_mags_errs_mask(tr_df, LSST_GAAP_MAG_COLS, LSST_GAAP_ERR_COLS)
+    mags_val, errs_val, mask_val = raw_mags_errs_mask(val_df, LSST_GAAP_MAG_COLS, LSST_GAAP_ERR_COLS)
 
     model, _, _ = PhotozMLPVAE.load(BASELINE_CKPT, SPECULATOR_DIR, FILTER_DIR, device=device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
