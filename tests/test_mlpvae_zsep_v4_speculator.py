@@ -1,29 +1,3 @@
-"""mlpvae_zsep_v4_speculator submission for the PZ Data Challenge (Task Sets 1-4).
-
-Same design as mlpvae_speculator_v2 (see PLAN.md) -- self-contained on
-purpose (a submission PR only adds this one file plus
-requirements_mlpvae_zsep_v4_speculator.txt and the workflow yaml;
-`submissions_src/` is local dev scratch, gitignored, never committed).
-
-Model: mlpvae_zsep_v4_lsst_gaap1p0_e2000_lzmin20, the z-separated
-architecture -- z gets its own supervised latent + MLP head; the 15 SPS
-params keep a VAE latent conditioned on z. Loaded via
-photoz_mlpvae.model.photoz_mlpvae_fixedprior.PhotozMLPVAE (NOT
-photoz_mlpvae.model.photoz_mlpvae.PhotozMLPVAE, and NOT
-photoz_mlpvae_old.PhotozMLPVAE, which mlpvae_speculator_v2 uses): this
-checkpoint predates photoz_mlpvae.py's i-mag-conditioned zprior +
-feat_mean/feat_scale additions, so the current module's strict=False load
-would silently leave those buffers untrained instead of erroring --
-photoz_mlpvae_fixedprior is a verified-strict-load recovery of the
-pre-zprior architecture. Same two GitHub-hosted dependencies as
-mlpvae_speculator_v2 (github.com/Klinjin/photoz_mlpvae for vendored source
-+ checkpoints, github.com/Klinjin/speculator for the Speculator weights
-via Git LFS, pinned to SPECULATOR_PIN_COMMIT -- this checkpoint predates a
-later PCA retrain on speculator's main), same use_colors/use_euclid/
-use_gaap settings, so no adapter or dependency-hosting changes were
-needed, only a different model module/checkpoint path and a different
-subtask-3 fine-tune loop (see below).
-"""
 
 from __future__ import annotations
 
@@ -47,13 +21,10 @@ from pz_data_challenge.taskset_3 import run_taskset_3
 from pz_data_challenge.taskset_4 import run_taskset_4
 
 SUBMISSION_NAME: str = "mlpvae_zsep_v4_speculator"
-# Premade p(z) estimates (fine-tuned model, qp.interp with zmode+object_id)
-# plus the pz_model files subtask 2 loads; contents sit at archive root.
 SUBMISSION_URL: str = (
     "https://github.com/Klinjin/photoz_mlpvae/raw/refs/heads/main/pz_challenge_submission/mlpvae_zsep_v4_speculator_submission.tgz"
 )
 
-# don't change these
 SUBMIT_DIR: str = f"submissions/{SUBMISSION_NAME}"
 PUBLIC_AREA: str = "tests/public"
 
@@ -61,20 +32,14 @@ SIMS = ["cardinal", "flagship"]
 SCENARIOS = ["1yr", "10yr"]
 TASKSETS = [1, 2, 3, 4]
 
-# ---------------------------------------------------------------------------
-# Model/code dependencies (see module docstring)
-# ---------------------------------------------------------------------------
 DEPS_DIR = Path(SUBMIT_DIR) / "_deps"
 PHOTOZ_MLPVAE_URL = "https://github.com/Klinjin/photoz_mlpvae.git"
 SPECULATOR_URL = "https://github.com/Klinjin/speculator.git"
-# pinned: checkpoint needs this commit's PCA dims, not current main's
 SPECULATOR_PIN_COMMIT = "cf3f653"
 _LFS_SMUDGED_MIN_BYTES = 1_000_000
 
-
 def _run(cmd: list[str], **kwargs) -> None:
     subprocess.run(cmd, check=True, **kwargs)
-
 
 def _clone_if_missing(url: str, dest: Path, commit: str | None = None) -> None:
     if dest.exists():
@@ -86,10 +51,7 @@ def _clone_if_missing(url: str, dest: Path, commit: str | None = None) -> None:
     else:
         _run(["git", "clone", "--depth", "1", url, str(dest)])
 
-
 def ensure_model_deps() -> tuple[str, str, str]:
-    """Clone dependency repos if needed; return (baseline_ckpt, speculator_dir,
-    filter_dir)."""
     photoz_mlpvae_dir = DEPS_DIR / "photoz_mlpvae"
     speculator_repo_dir = DEPS_DIR / "speculator"
 
@@ -118,29 +80,22 @@ def ensure_model_deps() -> tuple[str, str, str]:
 
     return str(baseline_ckpt), str(speculator_dir), str(filter_dir)
 
-
 try:
     BASELINE_CKPT, SPECULATOR_DIR, FILTER_DIR = ensure_model_deps()
 
     from obs_catalog.dataloader import (  # noqa: E402
         build_features, raw_mags_errs_mask, LSST_GAAP_MAG_COLS, LSST_GAAP_ERR_COLS,
     )
-    # pre-zprior architecture recovery, needed for this specific checkpoint
     from photoz_mlpvae.model.photoz_mlpvae_fixedprior import PhotozMLPVAE  # noqa: E402
 except:
     pass
     
-# ---------------------------------------------------------------------------
-# Adapter: challenge HDF5 schema -> the model's GAAP-named feature columns
-# ---------------------------------------------------------------------------
 LSST_BANDS = ["u", "g", "r", "i", "z", "y"]
 TARGET_COL = "redshift"
-
 
 def load_challenge_hdf5(path: str | Path) -> pd.DataFrame:
     with h5py.File(path, "r") as f:
         return pd.DataFrame({k: f[k][()] for k in f.keys()})
-
 
 def rename_to_gaap_schema(df: pd.DataFrame, is_test: bool) -> pd.DataFrame:
     rename_map: dict[str, str] = {}
@@ -173,34 +128,23 @@ def rename_to_gaap_schema(df: pd.DataFrame, is_test: bool) -> pd.DataFrame:
 
     return out
 
-
 def load_and_adapt(path: str | Path, is_test: bool) -> pd.DataFrame:
     return rename_to_gaap_schema(load_challenge_hdf5(path), is_test=is_test)
 
-
-# ---------------------------------------------------------------------------
-# Inference + qp output
-# ---------------------------------------------------------------------------
 Z_GRID = np.linspace(0.0, 6.0, 301, dtype=np.float32)
 
 DEFAULT_FINETUNE_EPOCHS = 60
 DEFAULT_FINETUNE_LR = 1e-4
 DEFAULT_FINETUNE_BATCH = 256
 DEFAULT_FINETUNE_PATIENCE = 15
-# Same mix as this checkpoint's own config.yaml (lam_z=20.0, lam_r=0.1,
-# sigma_floor=0.3); beta=0.0 (no KL term) -- a short warm-start fine-tune
-# doesn't need the original run's beta annealing schedule.
 FINETUNE_LAM_Z = 20.0
 FINETUNE_LAM_R = 0.1
 FINETUNE_SIGMA_FLOOR = 0.3
 
-
 def _device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
-
 def _gaussian_grid_pdf(z_pred: np.ndarray, sigma_z: np.ndarray, z_grid: np.ndarray) -> np.ndarray:
-    """Evaluate N(z_pred, sigma_z) on a shared grid and renormalize per-object."""
     sigma = np.clip(sigma_z, 1e-3, None).astype(np.float64)
     mu = z_pred.astype(np.float64)
     diff = (z_grid[None, :] - mu[:, None]) / sigma[:, None]
@@ -208,7 +152,6 @@ def _gaussian_grid_pdf(z_pred: np.ndarray, sigma_z: np.ndarray, z_grid: np.ndarr
     area = np.trapezoid(pdf, z_grid, axis=1)
     area = np.where(area > 0, area, 1.0)
     return (pdf / area[:, None]).astype(np.float32)
-
 
 def _write_qp_output(
     object_ids: np.ndarray, z_pred: np.ndarray, sigma_z: np.ndarray, output_file: str | Path,
@@ -223,11 +166,7 @@ def _write_qp_output(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ensemble.write_to(str(output_path))
 
-
 def _infer(model: PhotozMLPVAE, X: np.ndarray, device: str) -> tuple[np.ndarray, np.ndarray]:
-    """PhotozMLPVAE.predict_z returns (z_samples, z_mean, z_std) -- same
-    3-tuple shape/semantics in both the old and new (z-separated) model
-    classes, so this is unchanged from mlpvae_speculator_v2."""
     model.eval()
     with torch.no_grad():
         _, z_pred_t, sigma_z_t = model.predict_z(
@@ -235,19 +174,9 @@ def _infer(model: PhotozMLPVAE, X: np.ndarray, device: str) -> tuple[np.ndarray,
         )
     return z_pred_t.cpu().numpy(), sigma_z_t.cpu().numpy()
 
-
 def _run_estimation_only(
     model_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
-    """Subtask 2: inference with the pre-trained checkpoint in `model_file`.
-
-    In the shipped tarball (SUBMISSION_URL), each combo's pz_model file is
-    the exact fine-tuned checkpoint that generated its premade pz_estimate
-    file -- so running this on the same test file reproduces the premade
-    estimates. Subtask 3 (_run_training_and_estimation) demonstrates the
-    training pipeline itself: it re-derives such a checkpoint live from
-    the baseline during the CI run.
-    """
     device = _device()
     model, scaler, col_medians = PhotozMLPVAE.load(
         model_file, SPECULATOR_DIR, FILTER_DIR, device=device
@@ -261,7 +190,6 @@ def _run_estimation_only(
     z_pred, sigma_z = _infer(model, X, device)
     _write_qp_output(test_df["object_id"].to_numpy(), z_pred, sigma_z, output_file)
 
-
 def _run_training_and_estimation(
     train_file: str | Path,
     test_file: str | Path,
@@ -274,18 +202,6 @@ def _run_training_and_estimation(
     val_frac: float = 0.1,
     seed: int = 42,
 ) -> None:
-    """Subtask 3: fine-tune the baseline checkpoint on the framework's own
-    training file, live during this call, then infer on the test file.
-
-    Unlike mlpvae_speculator_v2's fine-tune loop (which called
-    model.encoder(x) directly with a hand-rolled z-only NLL), this uses
-    PhotozMLPVAE.loss() -- the z-separated model's encoder returns a
-    5-tuple (z_pred, mu_z, log_var_z, mu_15, log_var_15), not the old
-    4-tuple (z_pred, log_sigma_z, mu_15, log_var_15), so the old hand-rolled
-    loss doesn't apply. .loss() is the model's own native training
-    objective; mags/errs/mask for its reconstruction term come from
-    raw_mags_errs_mask (build_features itself no longer carries them).
-    """
     device = _device()
 
     train_df = load_and_adapt(train_file, is_test=False)
@@ -371,69 +287,48 @@ def _run_training_and_estimation(
     z_pred, sigma_z = _infer(model, X_test, device)
     _write_qp_output(test_df["object_id"].to_numpy(), z_pred, sigma_z, output_file)
 
-
 def run_taskset_1_estimation_only(
     model_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_estimation_only(model_file, test_file, output_file)
-
 
 def run_taskset_2_estimation_only(
     model_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_estimation_only(model_file, test_file, output_file)
 
-
 def run_taskset_3_estimation_only(
     model_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_estimation_only(model_file, test_file, output_file)
-
 
 def run_taskset_4_estimation_only(
     model_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_estimation_only(model_file, test_file, output_file)
 
-
 def run_taskset_1_training_and_estimation(
     train_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_training_and_estimation(train_file, test_file, output_file)
-
 
 def run_taskset_2_training_and_estimation(
     train_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_training_and_estimation(train_file, test_file, output_file)
 
-
 def run_taskset_3_training_and_estimation(
     train_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_training_and_estimation(train_file, test_file, output_file)
-
 
 def run_taskset_4_training_and_estimation(
     train_file: str | Path, test_file: str | Path, output_file: str | Path,
 ) -> None:
     _run_training_and_estimation(train_file, test_file, output_file)
 
-
 @pytest.fixture(name="setup_submit_area", scope="module")
 def setup_submit_area() -> int:
-    """Populate SUBMIT_DIR for Task Sets 1 & 2.
-
-    Primary path: download SUBMISSION_URL's tarball -- premade pz_estimate
-    files plus, per combo, the pz_model file holding the exact fine-tuned
-    checkpoint that generated that combo's premade estimates (so subtask 2
-    reproduces them). The loop after is a fallback that regenerates any
-    file still missing from BASELINE_CKPT (self-consistent too: fallback
-    estimates then come from the same baseline model_file) -- a plain
-    existence check rather than `if not os.path.exists(SUBMIT_DIR)`
-    because ensure_model_deps() already created SUBMIT_DIR/_deps at
-    import time.
-    """
     os.makedirs(os.path.join(SUBMIT_DIR, "outputs_2"), exist_ok=True)
     os.makedirs(os.path.join(SUBMIT_DIR, "outputs_3"), exist_ok=True)
 
@@ -474,7 +369,6 @@ def setup_submit_area() -> int:
 
     return 0
 
-
 def test_mlpvae_zsep_v4_speculator_taskset_1(
     setup_public_area: int,
     setup_submit_area: int,
@@ -488,7 +382,6 @@ def test_mlpvae_zsep_v4_speculator_taskset_1(
         run_taskset_1_estimation_only,
         run_taskset_1_training_and_estimation,
     )
-
 
 def test_mlpvae_zsep_v4_speculator_taskset_2(
     setup_public_area: int,
@@ -504,7 +397,6 @@ def test_mlpvae_zsep_v4_speculator_taskset_2(
         run_taskset_2_training_and_estimation,
     )
 
-
 def test_mlpvae_zsep_v4_speculator_taskset_3(
     setup_public_area: int,
     setup_submit_area: int,
@@ -518,7 +410,6 @@ def test_mlpvae_zsep_v4_speculator_taskset_3(
         run_taskset_3_estimation_only,
         run_taskset_3_training_and_estimation,
     )
-
 
 def test_mlpvae_zsep_v4_speculator_taskset_4(
     setup_public_area: int,
