@@ -288,10 +288,14 @@ def _run_training_and_estimation(
     val_df = train_df.iloc[idx[:n_val]].reset_index(drop=True)
     tr_df = train_df.iloc[idx[n_val:]].reset_index(drop=True)
 
-    X_tr, mags_tr, errs_tr, mask_tr, z_tr, scaler, col_medians = build_features(
+    # build_features() no longer returns per-band mags/errs/mask (2026-08-24
+    # obs_catalog/dataloader.py change) -- this fine-tune loop's loss only
+    # ever used X_tr/z_tr/scaler/col_medians (and X_val/z_val below), so
+    # the dropped values were already dead here.
+    X_tr, z_tr, scaler, col_medians = build_features(
         tr_df, use_colors=True, use_euclid=False, use_gaap=True, fit=True,
     )
-    X_val, mags_val, errs_val, mask_val, z_val, _, _ = build_features(
+    X_val, z_val, _, _ = build_features(
         val_df, use_colors=True, use_euclid=False, use_gaap=True,
         scaler=scaler, col_medians=col_medians, fit=False,
     )
