@@ -270,6 +270,7 @@ def _run_training_and_estimation(
             )
             opt.zero_grad(set_to_none=True)
             loss_dict["total"].backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
             opt.step()
 
         model.eval()
