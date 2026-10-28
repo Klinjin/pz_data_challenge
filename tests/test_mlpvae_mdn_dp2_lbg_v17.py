@@ -260,6 +260,7 @@ def _run_training_and_estimation(
     patience: int = DEFAULT_FINETUNE_PATIENCE,
     val_frac: float = 0.1,
     seed: int = 42,
+    save_model_to: str | Path | None = None,
 ) -> None:
     t_start = time.time()
     device = _device()
@@ -396,6 +397,8 @@ def _run_training_and_estimation(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    if save_model_to is not None:
+        model.save(str(save_model_to), scaler, col_medians)
 
     X_test, *_ = build_features(
         test_df, use_colors=True, use_euclid=False, use_gaap=True,
