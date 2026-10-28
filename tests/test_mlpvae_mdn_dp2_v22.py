@@ -23,12 +23,12 @@ from pz_data_challenge.taskset_4 import run_taskset_4
 
 SUBMISSION_NAME: str = "mlpvae_mdn_dp2_v22"
 SUBMISSION_URL: str = (
-    "https://github.com/Klinjin/photoz_mlpvae/releases/download/"
-    "pzdc-submission-v1/mlpvae_mdn_dp2_v22_submission.tgz"
+    "https://github.com/Klinjin/photoz_mlpvae/raw/refs/heads/main/"
+    "pz_challenge_submission/mlpvae_mdn_dp2_v22_submission.tgz"
 )
 SUBMISSION_URL_TS34: str = (
-    "https://github.com/Klinjin/photoz_mlpvae/releases/download/"
-    "pzdc-submission-v1/mlpvae_mdn_dp2_v22_ts34_submission.tgz"
+    "https://github.com/Klinjin/photoz_mlpvae/raw/refs/heads/main/"
+    "pz_challenge_submission/mlpvae_mdn_dp2_v22_ts34_submission.tgz"
 )
 
 SUBMIT_DIR: str = f"submissions/{SUBMISSION_NAME}"
