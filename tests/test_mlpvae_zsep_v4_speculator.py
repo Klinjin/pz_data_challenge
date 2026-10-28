@@ -24,6 +24,9 @@ SUBMISSION_NAME: str = "mlpvae_zsep_v4_speculator"
 SUBMISSION_URL: str = (
     "https://github.com/Klinjin/photoz_mlpvae/raw/refs/heads/main/pz_challenge_submission/mlpvae_zsep_v4_speculator_submission.tgz"
 )
+SUBMISSION_URL_TS34: str = (
+    "https://github.com/Klinjin/photoz_mlpvae/raw/refs/heads/main/pz_challenge_submission/mlpvae_zsep_v4_speculator_ts34_submission.tgz"
+)
 
 SUBMIT_DIR: str = f"submissions/{SUBMISSION_NAME}"
 PUBLIC_AREA: str = "tests/public"
@@ -339,6 +342,12 @@ def setup_submit_area() -> int:
     )
     if SUBMISSION_URL and not os.path.exists(marker):
         submit_utils.download_and_extract_tar(SUBMISSION_URL, SUBMIT_DIR)
+
+    marker_ts34 = os.path.join(
+        SUBMIT_DIR, "pz_challenge_taskset_3_cardinal_pz_estimate_1yr.hdf5"
+    )
+    if SUBMISSION_URL_TS34 and not os.path.exists(marker_ts34):
+        submit_utils.download_and_extract_tar(SUBMISSION_URL_TS34, SUBMIT_DIR)
 
     ESTIMATION_ONLY_BY_TASKSET = {
         1: run_taskset_1_estimation_only,
