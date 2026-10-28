@@ -215,6 +215,7 @@ def _run_training_and_estimation(
           f"epochs<={epochs} patience={patience}", flush=True)
 
     train_df = load_and_adapt(train_file, is_test=False)
+    train_df = train_df[train_df[TARGET_COL].notna()].reset_index(drop=True)
     test_df = load_and_adapt(test_file, is_test=True)
 
     rng = np.random.RandomState(seed)
