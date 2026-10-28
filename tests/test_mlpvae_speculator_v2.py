@@ -195,6 +195,7 @@ def _run_training_and_estimation(
     device = _device()
 
     train_df = load_and_adapt(train_file, is_test=False)
+    train_df = train_df[train_df[TARGET_COL].notna()].reset_index(drop=True)
     test_df = load_and_adapt(test_file, is_test=True)
 
     rng = np.random.RandomState(seed)
@@ -241,6 +242,7 @@ def _run_training_and_estimation(
             ).mean()
             opt.zero_grad(set_to_none=True)
             nll.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
             opt.step()
 
         model.eval()
