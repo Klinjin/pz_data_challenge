@@ -26,6 +26,10 @@ SUBMISSION_URL: str = (
     "https://github.com/Klinjin/photoz_mlpvae/releases/download/"
     "pzdc-submission-v1/mlpvae_mdn_dp2_v22_submission.tgz"
 )
+SUBMISSION_URL_TS34: str = (
+    "https://github.com/Klinjin/photoz_mlpvae/releases/download/"
+    "pzdc-submission-v1/mlpvae_mdn_dp2_v22_ts34_submission.tgz"
+)
 
 SUBMIT_DIR: str = f"submissions/{SUBMISSION_NAME}"
 PUBLIC_AREA: str = "tests/public"
@@ -348,6 +352,14 @@ def setup_submit_area() -> int:
     if SUBMISSION_URL and not os.path.exists(marker):
         submit_utils.download_and_extract_tar(SUBMISSION_URL, SUBMIT_DIR)
         print(f"[submit_area] tarball downloaded+extracted  elapsed={time.time() - t0:.1f}s",
+              flush=True)
+
+    marker_ts34 = os.path.join(
+        SUBMIT_DIR, "pz_challenge_taskset_3_cardinal_pz_estimate_1yr.hdf5"
+    )
+    if SUBMISSION_URL_TS34 and not os.path.exists(marker_ts34):
+        submit_utils.download_and_extract_tar(SUBMISSION_URL_TS34, SUBMIT_DIR)
+        print(f"[submit_area] TS3/4 tarball downloaded+extracted  elapsed={time.time() - t0:.1f}s",
               flush=True)
 
     ESTIMATION_ONLY_BY_TASKSET = {
