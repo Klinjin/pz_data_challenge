@@ -23,6 +23,10 @@ from pz_data_challenge.taskset_4 import run_taskset_4
 
 SUBMISSION_NAME: str = "mlpvae_mdn_dp2_lbg_v17"
 SUBMISSION_URL: str = ""
+SUBMISSION_URL_TS34: str = (
+    "https://github.com/Klinjin/photoz_mlpvae/releases/download/"
+    "pzdc-submission-v1/mlpvae_mdn_dp2_lbg_v17_ts34_submission.tgz"
+)
 
 SUBMIT_DIR: str = f"submissions/{SUBMISSION_NAME}"
 PUBLIC_AREA: str = "tests/public"
@@ -354,6 +358,14 @@ def setup_submit_area() -> int:
     t0 = time.time()
     os.makedirs(os.path.join(SUBMIT_DIR, "outputs_2"), exist_ok=True)
     os.makedirs(os.path.join(SUBMIT_DIR, "outputs_3"), exist_ok=True)
+
+    marker_ts34 = os.path.join(
+        SUBMIT_DIR, "pz_challenge_taskset_3_cardinal_pz_estimate_1yr.hdf5"
+    )
+    if SUBMISSION_URL_TS34 and not os.path.exists(marker_ts34):
+        submit_utils.download_and_extract_tar(SUBMISSION_URL_TS34, SUBMIT_DIR)
+        print(f"[submit_area] TS3/4 tarball downloaded+extracted  elapsed={time.time() - t0:.1f}s",
+              flush=True)
 
     ESTIMATION_ONLY_BY_TASKSET = {
         1: run_taskset_1_estimation_only,
